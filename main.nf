@@ -130,7 +130,7 @@ process visualize_snps {
 
     script:
     """
-    mview -in clustal -html head -coloring mismatch -colormap red ${alignment} > protein_aln_snp.html
+    mview -in fasta -html head -css on -coloring mismatch -colormap red ${alignment} > protein_aln_snp.html
     #mview -in fasta -html head -css on -coloring mismatch -colormap red -find 'NGKL|DVVY|MMIT|ISYG|IKYG|GFTP|PINFM|EVVDY|LPFG' ${alignment} > protein_aln_snp.html
     
     """
