@@ -21,6 +21,7 @@ if (params.help) {
               |  --outdir    Directory where process outputs are saved     
               |  --query_aa  Amino acid sequence for the gene of interest
               |  --query_fa  Nucleotide sequence for the gene of interest
+              |  --platform  Illumina/ONT 
               |
               |Optional arguments:  
               |  --cyp51     Run the analysis to identify SNPs and TR regions in the Cyp51 gene of all samples
@@ -30,26 +31,50 @@ if (params.help) {
     exit(0)
 }
 
+// Quality Filtering
+
 process FAQCS {
 
     tag "${sampleID}"
     
-    publishDir "${params.outdir}/FAQCS", mode: 'copy'
+    publishDir "${params.outdir}/filtered_reads", mode: 'copy'
 
     input:
     tuple val(sampleID), path(read1), path(read2)
 
     output:
-    path "${sampleID}*", emit: faqcs_out
     tuple val(sampleID), path("${sampleID}/${sampleID}.1.trimmed.fastq"), path("${sampleID}/${sampleID}.2.trimmed.fastq"), emit: trimmed
 
     script:
     """
-    FaQCs -1 ${read1} -2 ${read2} --prefix ${sampleID} -d ${sampleID}
+    FaQCs -1 ${read1} -2 ${read2} -q 30 --prefix ${sampleID} -d ${sampleID}
     """
 }
 
-process assembly {
+process FASTPLONG {
+    tag "${sampleID}"
+    
+    publishDir "${params.outdir}/filtered_reads", mode: 'copy',
+        saveAs: { filename -> "${sampleID}/${filename}" }
+
+    input:
+    tuple val(sampleID), path(reads)
+
+    output:
+    tuple val(sampleID), path("${sampleID}.filtered.fastq.gz"), emit: trimmed
+
+
+    script:
+    """
+    cat ${reads.join(' ')} > ${sampleID}.combined.fastq.gz
+    fastplong -i ${sampleID}.combined.fastq.gz -o ${sampleID}.filtered.fastq.gz -q 30 
+    """
+
+}
+
+// Assembly
+
+process ASSEMBLY_ILLUMINA {
 
     tag "${sampleID}"
 
@@ -66,6 +91,26 @@ process assembly {
     script:
     """
     spades.py -1 ${read1} -2 ${read2} -k 127  --only-assembler -o ${sampleID}
+    """
+
+}
+
+process ASSEMBLY_ONT {
+
+    tag "${sampleID}"
+
+
+    publishDir "${params.outdir}/Assemblies", mode: 'copy'
+
+    input:
+    tuple val(sampleID), path(reads)
+
+    output:
+    tuple val(sampleID), path("${sampleID}/assembly.fasta"), emit: fasta
+
+    script:
+    """
+    flye --nano-hq ${reads} -o ${sampleID}
     """
 
 }
@@ -130,9 +175,7 @@ process visualize_snps {
 
     script:
     """
-    mview -in fasta -html head -css on -coloring mismatch -colormap red ${alignment} > protein_aln_snp.html
-    #mview -in fasta -html head -css on -coloring mismatch -colormap red -find 'NGKL|DVVY|MMIT|ISYG|IKYG|GFTP|PINFM|EVVDY|LPFG' ${alignment} > protein_aln_snp.html
-    
+    mview -in fasta -html head -coloring mismatch -colormap red ${alignment} > protein_aln_snp.html
     """
 
 }
@@ -262,7 +305,8 @@ workflow {
     def required = [
         input    : "Please specify the input samplesheet",
         query_aa : "Please specify the path to the gene amino acid sequence FASTA file",
-        query_fa : "Please specify the path to the gene nucleotide sequence FASTA file"
+        query_fa : "Please specify the path to the gene nucleotide sequence FASTA file",
+        platform : "Please specify the sequencing platform: 'illumina' or 'ont'"
     ]
 
     def missing = required.findAll { k, msg -> !params[k] }
@@ -274,15 +318,28 @@ workflow {
         """
     }
 
-    ch_samples = Channel.fromPath(params.input)
-                .splitCsv(sep: ':')
-                .map { row -> tuple(row[0], file(row[1]), file(row[2])) }
-
     def query_aa_file = file(params.query_aa)
     def query_fa_file = file(params.query_fa)
 
-    faqcs = FAQCS(ch_samples)
-    assemblies = assembly(faqcs.trimmed)
+    if (params.platform == 'illumina') {
+        ch_samples = Channel.fromPath(params.input)
+                .splitCsv(header: true)
+                .map { row -> tuple(row.sample, file(row.fastq_1), file(row.fastq_2)) }
+
+        qc_reads = FAQCS(ch_samples)
+        assemblies = ASSEMBLY_ILLUMINA(qc_reads.trimmed)
+    }
+
+    if (params.platform == 'ont') {
+        ch_samples = Channel.fromPath(params.input)
+                .splitCsv(header: true)
+                .map { row -> tuple(row.sample, files("${row.folder}/*.fastq.gz")) }
+
+        qc_reads = FASTPLONG(ch_samples)
+        assemblies = ASSEMBLY_ONT(qc_reads.trimmed)
+    }
+    
+
     blast_ch = blast_run(assemblies.fasta,query_aa_file,query_fa_file)
 
     // protein clustal alignment and visualization
@@ -293,28 +350,28 @@ workflow {
     prot_aln = combine_and_align(query_aa_file, prot_in)
     visualize_snps(prot_aln)
 
-    // everything here onwards is exclusively cyp51 analysis
+    // // everything here onwards is exclusively cyp51 analysis
 
-    if ( params.cyp51 ) {
+    // if ( params.cyp51 ) {
 
-        log.info "Running Cyp51/TR analysis"
+    //     log.info "Running Cyp51/TR analysis"
 
-        extract_ch = assemblies.join(blast_ch.best_hit)
-        cyp51_seq_ch = extract_cyp51_coding_noncoding_sequence(extract_ch)
+    //     extract_ch = assemblies.join(blast_ch.best_hit)
+    //     cyp51_seq_ch = extract_cyp51_coding_noncoding_sequence(extract_ch)
 
-        // extract non coding sequence part, identify TR in sample and combine results into one report
-        tr_ch = cyp51_seq_ch.non_coding_seq
-        dist_TR = identify_distance_TR(tr_ch).collect()
+    //     // extract non coding sequence part, identify TR in sample and combine results into one report
+    //     tr_ch = cyp51_seq_ch.non_coding_seq
+    //     dist_TR = identify_distance_TR(tr_ch).collect()
         
-        // combine all the fasta with 500 bp upstream for the visual alignment
-        combined_wnoncoding = tr_ch.map { sid, seq -> seq}
-                              .collectFile(name: 'wnoncoding_gene_multifasta.fasta')
-        alignment = align_cyp51(query_fa_file,combined_wnoncoding)
-        plot_TR(alignment)
+    //     // combine all the fasta with 500 bp upstream for the visual alignment
+    //     combined_wnoncoding = tr_ch.map { sid, seq -> seq}
+    //                           .collectFile(name: 'wnoncoding_gene_multifasta.fasta')
+    //     alignment = align_cyp51(query_fa_file,combined_wnoncoding)
+    //     plot_TR(alignment)
 
 
-        //create report for the TR identified
-        report_TR(dist_TR)
+    //     //create report for the TR identified
+    //     report_TR(dist_TR)
 
-    }
+    // }
 }
