@@ -1,0 +1,8 @@
+.nextflow*
+work
+results*
+.vscode
+.nextflow
+*.pyc
+*html
+*.log
