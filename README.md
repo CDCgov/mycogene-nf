@@ -1,3 +1,33 @@
+# MycoGene-nf
+Pipeline for identifying nucleotide and amino acid variants associated with genetic markers and biologically relevant phenotypes from Illumina and Oxford nanopore technologies (ONT) sequencing data.
+
+## Overview
+
+MycoGene-nf is a nextflow based workflow designed to analyze target gene sequences from genomic sequencing data generated using Illumina and Oxford Nanopore Technologies (ONT) platforms. The pipeline extracts gene and protein sequences, compares them against reference sequences and identifies nucleotide and amino acid changes that may be associated with specific genetic markers, functional traits, or known molecular signatures.
+
+The workflow supports flexible analysis of genes and organisms depending on the provided reference sequences and analysis targets. By incorporating both short-read and long-read sequencing technologies, the pipeline enables scalable and reproducible characterization of sequence variation across diverse datasets.
+
+For example, mutations in the CYP51 gene may be associated with azole resistance in fungal pathogens, while other target genes may be used to identify lineage-specific markers, functional variants, or clinically relevant mutations.
+
+## Workflow
+
+1.	Input read quality control
+2.	Genome assembly
+3.	Target gene extraction
+4.	Sequence alignment to reference gene
+5.	Amino acid mutation detection/identification
+6.	Reporting
+Optional analysis module includes:
+1.	CYP51 mutation characterization
+2.	Variant reporting
+3.	Tander repeat identification
+
+## Usage
+```bash
+nextflow run CDCgov/mycogene-nf --input <samplesheet.csv> --outdir <output_directory> --query_aa <gene_amino_acid_sequence> --query_fa <gene_nucleotide_sequence> --platform <'ont' or 'illumina'>
+```
+
+
 # CDCgov GitHub Organization Open Source Project Template
 
 **Template for clearance: This project serves as a template to aid projects in starting up and moving through clearance procedures. To start, create a new repository and implement the required [open practices](open_practices.md), train on and agree to adhere to the organization's [rules of behavior](rules_of_behavior.md), and [send a request through the create repo form](https://forms.office.com/Pages/ResponsePage.aspx?id=aQjnnNtg_USr6NJ2cHf8j44WSiOI6uNOvdWse4I-C2NUNk43NzMwODJTRzA4NFpCUk1RRU83RTFNVi4u) using language from this template as a Guide.**
