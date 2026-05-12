@@ -350,28 +350,26 @@ workflow {
     prot_aln = combine_and_align(query_aa_file, prot_in)
     visualize_snps(prot_aln)
 
-    // // everything here onwards is exclusively cyp51 analysis
+    // everything here onwards is exclusively cyp51 analysis
 
-    // if ( params.cyp51 ) {
+    if ( params.cyp51 ) {
 
-    //     log.info "Running Cyp51/TR analysis"
+        log.info "Running Cyp51/TR analysis"
 
-    //     extract_ch = assemblies.join(blast_ch.best_hit)
-    //     cyp51_seq_ch = extract_cyp51_coding_noncoding_sequence(extract_ch)
+        extract_ch = assemblies.join(blast_ch.best_hit)
+        cyp51_seq_ch = extract_cyp51_coding_noncoding_sequence(extract_ch)
 
-    //     // extract non coding sequence part, identify TR in sample and combine results into one report
-    //     tr_ch = cyp51_seq_ch.non_coding_seq
-    //     dist_TR = identify_distance_TR(tr_ch).collect()
+        // extract non coding sequence part, identify TR in sample and combine results into one report
+        tr_ch = cyp51_seq_ch.non_coding_seq
+        dist_TR = identify_distance_TR(tr_ch).collect()
         
-    //     // combine all the fasta with 500 bp upstream for the visual alignment
-    //     combined_wnoncoding = tr_ch.map { sid, seq -> seq}
-    //                           .collectFile(name: 'wnoncoding_gene_multifasta.fasta')
-    //     alignment = align_cyp51(query_fa_file,combined_wnoncoding)
-    //     plot_TR(alignment)
+        // combine all the fasta with 500 bp upstream for the visual alignment
+        combined_wnoncoding = tr_ch.map { sid, seq -> seq}
+                              .collectFile(name: 'wnoncoding_gene_multifasta.fasta')
+        alignment = align_cyp51(query_fa_file,combined_wnoncoding)
+        plot_TR(alignment)
 
-
-    //     //create report for the TR identified
-    //     report_TR(dist_TR)
-
-    // }
+        //create report for the TR identified
+        report_TR(dist_TR)
+    }
 }
