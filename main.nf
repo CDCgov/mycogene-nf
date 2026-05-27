@@ -86,7 +86,7 @@ process ASSEMBLY_ILLUMINA {
     tuple val(sampleID), path(read1), path(read2)
 
     output:
-    tuple val(sampleID), path("${sampleID}/scaffolds.fasta"), emit: fasta
+    tuple val(sampleID), path("${sampleID}/scaffolds.fasta"), emit: assembly
 
     script:
     """
@@ -106,7 +106,7 @@ process ASSEMBLY_ONT {
     tuple val(sampleID), path(reads)
 
     output:
-    tuple val(sampleID), path("${sampleID}/assembly.fasta"), emit: fasta
+    tuple val(sampleID), path("${sampleID}/assembly.fasta"), emit: assembly
 
     script:
     """
@@ -122,22 +122,18 @@ process blast_run {
     publishDir "${params.outdir}/blast_gene_hits", mode: 'copy', saveAs: { fname -> "${sampleID}/${fname}" }
 
     input:
-    tuple val(sampleID), path(fasta)
+    tuple val(sampleID), path(assembly)
     path(query_aa)
-    path(query_fa)
 
     output:
-    tuple val(sampleID), path("best_hit_${sampleID}.tsv"), emit: best_hit
+    // tuple val(sampleID), path("best_hit_${sampleID}.tsv"), emit: best_hit
     tuple val(sampleID), path("prot_seq_${sampleID}.fasta"), emit: prot_seq
 
     script:
     """
     #blastn - run and clean output
 
-    blastn -query ${query_fa} -subject ${fasta} -outfmt "6 qseqid sseqid sstart send pident length evalue bitscore" | sed 's,^,'"${sampleID}"'\t,' | head -n 1 > best_hit_${sampleID}.txt
-    awk 'BEGIN {printf "%-8s\\t%-10s\\t%-35s\\t%-8s\\t%-8s\\t%-8s\\t%-8s\\t%-8s\\t%-8s\\n", "sample", "qseqid", "sseqid", "sstart", "send", "pident", "length", "evalue", "bitscore"}' > best_hit_${sampleID}.tsv
-    awk '{printf "%-8s\\t%-10s\\t%-35s\\t%-8s\\t%-8s\\t%-8s\\t%-8s\\t%-8s\\t%-8s\\n", \$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9}' best_hit_${sampleID}.txt >> best_hit_${sampleID}.tsv
-    tblastn -query ${query_aa} -subject ${fasta} -max_target_seqs 1 -outfmt "6 delim=, qstart sseq" | sed 's/,/\t/g' | sort -k 1 | cut -f2 | tr -d '\n' | sed 's/EYCFLNRQ//' | awk -v s="${sampleID}" 'BEGIN{print ">"s}{print}' > prot_seq_${sampleID}.fasta
+    tblastn -query ${query_aa} -subject ${assembly} -max_target_seqs 1 -outfmt "6 delim=, qstart sseq" | sed 's/,/\t/g' | sort -k 1 | cut -f2 | tr -d '\n' | sed 's/EYCFLNRQ//' | awk -v s="${sampleID}" 'BEGIN{print ">"s}{print}' > prot_seq_${sampleID}.fasta
     """
 
 }
@@ -181,6 +177,29 @@ process visualize_snps {
 }
 
 /// Cyp51 Analysis ONLY
+
+process extract_best_hit {
+
+    tag "${sampleID}"
+
+    publishDir "${params.outdir}/intermediate_outputs", mode: 'copy'
+
+    input:
+    tuple val(sampleID), path(assembly)
+    path(query_fa)
+
+    output:
+    tuple val(sampleID), path("best_hit_${sampleID}.tsv"), emit: best_hit
+
+    script:
+    """
+    #blastn - run and clean output
+    blastn -query ${query_fa} -subject ${assembly} -outfmt "6 qseqid sseqid sstart send pident length evalue bitscore" | sed 's,^,'"${sampleID}"'\t,' | head -n 1 > best_hit_${sampleID}.txt
+    awk 'BEGIN {printf "%-8s\\t%-10s\\t%-35s\\t%-8s\\t%-8s\\t%-8s\\t%-8s\\t%-8s\\t%-8s\\n", "sample", "qseqid", "sseqid", "sstart", "send", "pident", "length", "evalue", "bitscore"}' > best_hit_${sampleID}.tsv
+    awk '{printf "%-8s\\t%-10s\\t%-35s\\t%-8s\\t%-8s\\t%-8s\\t%-8s\\t%-8s\\t%-8s\\n", \$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9}' best_hit_${sampleID}.txt >> best_hit_${sampleID}.tsv
+    """
+
+}
 
 process extract_cyp51_coding_noncoding_sequence {
 
@@ -305,7 +324,6 @@ workflow {
     def required = [
         input    : "Please specify the input samplesheet",
         query_aa : "Please specify the path to the gene amino acid sequence FASTA file",
-        query_fa : "Please specify the path to the gene nucleotide sequence FASTA file",
         platform : "Please specify the sequencing platform: 'illumina' or 'ont'"
     ]
 
@@ -318,8 +336,12 @@ workflow {
         """
     }
 
+    if (params.cyp51 && !params.query_fa) {
+        error "Missing required parameter for Cyp51 Analysis: --query_fa"
+    }
+
     def query_aa_file = file(params.query_aa)
-    def query_fa_file = file(params.query_fa)
+    def query_fa_file = params.query_fa ? file(params.query_fa) : null
 
     if (params.platform == 'illumina') {
         ch_samples = Channel.fromPath(params.input)
@@ -340,7 +362,7 @@ workflow {
     }
     
 
-    blast_ch = blast_run(assemblies.fasta,query_aa_file,query_fa_file)
+    blast_ch = blast_run(assemblies.assembly,query_aa_file)
 
     // protein clustal alignment and visualization
     prot_in = blast_ch.prot_seq
@@ -356,7 +378,10 @@ workflow {
 
         log.info "Running Cyp51/TR analysis"
 
-        extract_ch = assemblies.join(blast_ch.best_hit)
+        best_hit = extract_best_hit(assemblies.assembly,query_fa_file)
+        assemblies.join(best_hit)
+
+        extract_ch = assemblies.join(best_hit)
         cyp51_seq_ch = extract_cyp51_coding_noncoding_sequence(extract_ch)
 
         // extract non coding sequence part, identify TR in sample and combine results into one report
