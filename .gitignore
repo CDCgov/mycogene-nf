@@ -6,3 +6,5 @@ results*
 *.pyc
 *html
 *.log
+*csv
+*fasta

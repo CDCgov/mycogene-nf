@@ -31,7 +31,7 @@ if (params.help) {
 
 // Quality Filtering
 
-process FAQCS {
+process FASTP {
     tag "${sampleID}"
     publishDir "${params.outdir}/filtered_reads", mode: 'copy'
 
@@ -39,11 +39,19 @@ process FAQCS {
     tuple val(sampleID), path(read1), path(read2)
 
     output:
-    tuple val(sampleID), path("${sampleID}/${sampleID}.1.trimmed.fastq"), path("${sampleID}/${sampleID}.2.trimmed.fastq"), emit: trimmed
+    tuple val(sampleID), path("${sampleID}.R1.fastp.fastq.gz"), path("${sampleID}.R2.fastp.fastq.gz"), emit: trimmed
+    tuple val(sampleID), path("${sampleID}_qc.json"),                                                   emit: json
 
     script:
     """
-    FaQCs -1 ${read1} -2 ${read2} -q 30 --prefix ${sampleID} -d ${sampleID}
+    fastp \
+        -i ${read1} -I ${read2} \
+        -o ${sampleID}.R1.fastp.fastq.gz \
+        -O ${sampleID}.R2.fastp.fastq.gz \
+        -q 30 \
+        -j ${sampleID}_qc.json \
+        -h /dev/null \
+        --thread 4
     """
 }
 
@@ -57,11 +65,17 @@ process FASTPLONG {
 
     output:
     tuple val(sampleID), path("${sampleID}.filtered.fastq.gz"), emit: trimmed
+    tuple val(sampleID), path("${sampleID}_qc.json"),           emit: json
 
     script:
     """
     cat ${reads.join(' ')} > ${sampleID}.combined.fastq.gz
-    fastplong -i ${sampleID}.combined.fastq.gz -o ${sampleID}.filtered.fastq.gz -q 30
+    fastplong \
+        -i ${sampleID}.combined.fastq.gz \
+        -o ${sampleID}.filtered.fastq.gz \
+        -q 30 \
+        -j ${sampleID}_qc.json \
+        -h /dev/null
     """
 }
 
@@ -109,7 +123,8 @@ process blast_run {
     path(query_aa)
 
     output:
-    tuple val(sampleID), path("prot_seq_${sampleID}.fasta"), emit: prot_seq
+    tuple val(sampleID), path("prot_seq_${sampleID}.fasta"),    emit: prot_seq
+    tuple val(sampleID), path("tblastn_raw_${sampleID}.tsv"),   emit: tblastn_raw
 
     script:
     """
@@ -117,13 +132,19 @@ process blast_run {
         -query ${query_aa} \
         -subject ${assembly} \
         -max_target_seqs 1 \
-        -outfmt "6 delim=, qstart qend sseq" \
-    | sed 's/,/\t/g' \
+        -outfmt "6 delim=, qstart qend pident length sseq" \
+    > tblastn_combined_${sampleID}.csv
+
+    # Save qstart, qend, pident, length for coverage calculation
+    sed 's/,/\t/g' tblastn_combined_${sampleID}.csv | cut -f1-4 > tblastn_raw_${sampleID}.tsv
+
+    # Build the merged protein sequence (HSP overlap-aware)
+    sed 's/,/\t/g' tblastn_combined_${sampleID}.csv \
     | sort -k1,1n \
     | awk '
         BEGIN { prev_end = 0 }
         {
-            qstart = \$1; qend = \$2; seq = \$3
+            qstart = \$1; qend = \$2; seq = \$5
             if (qstart > prev_end) {
                 printf "%s", seq
                 prev_end = qend
@@ -136,6 +157,70 @@ process blast_run {
     ' \
     | awk -v s="${sampleID}" 'BEGIN{print ">"s}{print}' \
     > prot_seq_${sampleID}.fasta
+    """
+}
+
+// Gene coverage: identity-weighted coverage of the reference protein
+
+process gene_coverage {
+    tag "${sampleID}"
+    publishDir "${params.outdir}/qc_report/gene_coverage", mode: 'copy'
+
+    input:
+    tuple val(sampleID), path(tblastn_raw)
+    val(ref_length)
+
+    output:
+    tuple val(sampleID), path("coverage_${sampleID}.csv"), emit: coverage
+
+    script:
+    """
+    gene_coverage.py \
+        --sample      ${sampleID} \
+        --tblastn-out ${tblastn_raw} \
+        --ref-length  ${ref_length} \
+        --output      coverage_${sampleID}.csv
+    """
+}
+
+// Per-sample QC report
+
+process SAMPLE_QC {
+    tag "${sampleID}"
+    publishDir "${params.outdir}/qc_report", mode: 'copy'
+
+    input:
+    tuple val(sampleID), val(platform), path(json), path(assembly), path(coverage_csv)
+
+    output:
+    path("${sampleID}_qc.csv"), emit: qc_csv
+
+    script:
+    """
+    sample_qc.py \
+        --sample        ${sampleID} \
+        --platform      ${platform} \
+        --json          ${json} \
+        --assembly      ${assembly} \
+        --gene-coverage ${coverage_csv} \
+        --output        ${sampleID}_qc.csv
+    """
+}
+
+// Merge all per-sample QC CSVs into one run-level report
+
+process MERGE_QC {
+    publishDir "${params.outdir}/qc_report", mode: 'copy'
+
+    input:
+    path(qc_csvs)
+
+    output:
+    path("qc_report.csv")
+
+    script:
+    """
+    merge_qc.py --input ${qc_csvs} --output qc_report.csv
     """
 }
 
@@ -205,7 +290,7 @@ process extract_best_hit {
     """
     blastn -query ${query_fa} -subject ${assembly} -outfmt "6 qseqid sseqid sstart send pident length evalue bitscore" | sed 's,^,'"${sampleID}"'\t,' | head -n 1 > best_hit_${sampleID}.txt
     awk 'BEGIN {OFS="\t"; print "sample","qseqid","sseqid","sstart","send","pident","length","evalue","bitscore"}' > best_hit_${sampleID}.tsv
-    awk 'BEGIN{OFS="\t"} {print \$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9}' best_hit_${sampleID}.txt >> best_hit_${sampleID}.tsv 
+    awk 'BEGIN{OFS="\t"} {print \$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9}' best_hit_${sampleID}.txt >> best_hit_${sampleID}.tsv
     """
 }
 
@@ -335,11 +420,19 @@ ERROR: Missing required parameter(s):
     def query_aa_file = file(params.query_aa)
     def query_fa_file = params.query_fa ? file(params.query_fa) : null
 
+    // Reference protein length, used as the coverage denominator
+    def ref_aa_length = 0
+    query_aa_file.eachLine { line ->
+        if (!line.startsWith(">")) {
+            ref_aa_length += line.trim().length()
+        }
+    }
+
     if (params.platform == 'illumina') {
         ch_samples = Channel.fromPath(params.input)
             .splitCsv(header: true)
             .map { row -> tuple(row.sample, file(row.fastq_1), file(row.fastq_2)) }
-        qc_reads  = FAQCS(ch_samples)
+        qc_reads  = FASTP(ch_samples)
         assemblies = ASSEMBLY_ILLUMINA(qc_reads.trimmed)
     }
 
@@ -352,6 +445,17 @@ ERROR: Missing required parameter(s):
     }
 
     blast_ch = blast_run(assemblies.assembly, query_aa_file)
+
+    // gene coverage: % of reference protein matched, identity-weighted
+    coverage_ch = gene_coverage(blast_ch.tblastn_raw, ref_aa_length)
+
+    // QC report: join QC json + assembly + gene coverage per sample
+    qc_input = qc_reads.json
+        .join(assemblies.assembly)
+        .join(coverage_ch.coverage)
+        .map { sid, json, asm, cov -> tuple(sid, params.platform, json, asm, cov) }
+
+    MERGE_QC(SAMPLE_QC(qc_input).qc_csv.collect())
 
     // protein clustal alignment, visualization and mutation report
     prot_in = blast_ch.prot_seq
@@ -370,19 +474,15 @@ ERROR: Missing required parameter(s):
         extract_ch   = assemblies.assembly.join(best_hit.best_hit)
         cyp51_seq_ch = extract_cyp51_coding_noncoding_sequence(extract_ch)
 
-        // extract non coding sequence part, identify TR in sample and combine results into one report
         tr_ch   = cyp51_seq_ch.non_coding_seq
         dist_TR = identify_distance_TR(tr_ch).collect()
 
-        // combine all the fasta with 500 bp upstream for the visual alignment
         combined_wnoncoding = tr_ch
             .map { sid, seq -> seq }
             .collectFile(name: 'wnoncoding_gene_multifasta.fasta')
 
         alignment = align_cyp51(query_fa_file, combined_wnoncoding)
         plot_TR(alignment)
-
-        // create report for the TR identified
         report_TR(dist_TR)
     }
 }
