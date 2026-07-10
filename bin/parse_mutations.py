@@ -7,7 +7,7 @@ with all mutations comma-separated.
 
 First sequence in the alignment is treated as the reference.
 
-Output TSV:
+Output CSV:
     sample    mutation
     SRR001    G98H,K234L
     SRR002    no_mutations
@@ -15,7 +15,7 @@ Output TSV:
 
 Usage:
     python3 parse_mutations.py --alignment aln_protein_output.fasta \
-                               --output mutations.tsv
+                               --output mutations.csv
 """
 
 import argparse
@@ -110,7 +110,7 @@ def main():
     parser.add_argument("-a", "--alignment", required=True,
                         help="ClustalO alignment FASTA. First sequence = reference.")
     parser.add_argument("-o", "--output", required=True,
-                        help="Output TSV path.")
+                        help="Output CSV path.")
     args = parser.parse_args()
 
     if not Path(args.alignment).exists():
@@ -127,7 +127,7 @@ def main():
     print(f"Samples   : {len(records) - 1}", file=sys.stderr)
 
     with open(args.output, "w", newline="") as fh:
-        writer = csv.writer(fh, delimiter="\t")
+        writer = csv.writer(fh, delimiter=",")
         writer.writerow(["sample", "mutation"])
 
         for sample_id, sample_aln in records[1:]:

@@ -12,23 +12,16 @@ import argparse
 import csv
 import sys
 
-# Primary columns first, diagnostic columns at the end (matches sample_qc.py)
 FIELDNAMES = [
     "sample",
+    "gene_coverage",
+    "avg_qscore",
+    "percent_retained",
+    "gc_content",    
+    "avg_read_length",
+    "assembly_size",
     "qc_status",
     "qc_fail_reason",
-    "gene_coverage",
-    "percent_retained",
-    "avg_qscore",
-    "gc_content",
-    "input_reads",
-    "filtered_reads",
-    "platform",
-    "avg_read_length",
-    "total_bases",
-    "assembly_size",
-    "contig_count",
-    "N50",
 ]
 
 
