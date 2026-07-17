@@ -33,7 +33,8 @@ if (params.help) {
 
 process FASTP {
     tag "${sampleID}"
-    publishDir "${params.outdir}/filtered_reads", mode: 'copy'
+    publishDir "${params.outdir}/filtered_reads", mode: 'copy',
+        saveAs: {filename -> filename.endsWith('.fastq.gz') ? filename : null}
 
     input:
     tuple val(sampleID), path(read1), path(read2)
@@ -48,7 +49,7 @@ process FASTP {
         -i ${read1} -I ${read2} \
         -o ${sampleID}.R1.fastp.fastq.gz \
         -O ${sampleID}.R2.fastp.fastq.gz \
-        -q 30 \
+        -e 20 \
         -j ${sampleID}_qc.json \
         -h /dev/null \
         --thread 4
@@ -58,7 +59,7 @@ process FASTP {
 process FASTPLONG {
     tag "${sampleID}"
     publishDir "${params.outdir}/filtered_reads", mode: 'copy',
-        saveAs: { filename -> "${sampleID}/${filename}" }
+        saveAs: {filename -> filename.endsWith('.fastq.gz') ? "${sampleID}/${filename}" : null}
 
     input:
     tuple val(sampleID), path(reads)
@@ -73,7 +74,7 @@ process FASTPLONG {
     fastplong \
         -i ${sampleID}.combined.fastq.gz \
         -o ${sampleID}.filtered.fastq.gz \
-        -q 30 \
+        -e 20 \
         -j ${sampleID}_qc.json \
         -h /dev/null
     """
@@ -164,7 +165,6 @@ process blast_run {
 
 process gene_coverage {
     tag "${sampleID}"
-    publishDir "${params.outdir}/qc_report/gene_coverage", mode: 'copy'
 
     input:
     tuple val(sampleID), path(tblastn_raw)
@@ -187,13 +187,12 @@ process gene_coverage {
 
 process SAMPLE_QC {
     tag "${sampleID}"
-    publishDir "${params.outdir}/qc_report", mode: 'copy'
 
     input:
     tuple val(sampleID), val(platform), path(json), path(assembly), path(coverage_csv)
 
     output:
-    path("${sampleID}_qc.csv"), emit: qc_csv
+    tuple val(sampleID), path("${sampleID}_qc.csv"), emit: qc_csv
 
     script:
     """
@@ -265,11 +264,11 @@ process parse_mutations {
     path(alignment)
 
     output:
-    path("mutations.tsv")
+    path("mutations.csv")
 
     script:
     """
-    parse_mutations.py --alignment ${alignment} --output mutations.tsv
+    parse_mutations.py --alignment ${alignment} --output mutations.csv
     """
 }
 
@@ -295,7 +294,6 @@ process extract_best_hit {
 }
 
 process extract_cyp51_coding_noncoding_sequence {
-    // errorStrategy 'ignore'
     tag "${sampleID}"
     publishDir "${params.outdir}/intermediate_outputs", mode: 'copy'
 
@@ -308,12 +306,8 @@ process extract_cyp51_coding_noncoding_sequence {
 
     script:
     """
-    #extract contig name, start and end for each sample
     read scaff start end <<< "\$(awk 'NR==2{print \$3, \$4, \$5}' ${blast_out})"
 
-    #extract 500 upstream nucleotides because the repeat regions are present 500bp upstream of the cyp51 gene
-    #start position is backed by 500 bp (-500 bp) before gene starts; incase gene is reverse match, 500 bp are added (+500 bp)
-    #extract gene sequences
     if [ \$start -lt \$end ]; then
         samtools faidx ${assembly} \$scaff:\$start-\$end -o seq_${sampleID}.fasta
         samtools faidx ${assembly} \$scaff:\$((\$start-500))-\$end | sed "1s/.*/>${sampleID}/" > wnoncoding_${sampleID}.fasta
@@ -439,14 +433,12 @@ ERROR: Missing required parameter(s):
     if (params.platform == 'ont') {
         ch_samples = Channel.fromPath(params.input)
             .splitCsv(header: true)
-            .map { row -> tuple(row.sample, files("${row.folder}/*.fastq.gz")) }
+            .map { row -> tuple(row.sample, file("${row.folder}/*.fastq.gz")) }
         qc_reads  = FASTPLONG(ch_samples)
         assemblies = ASSEMBLY_ONT(qc_reads.trimmed)
     }
 
-    blast_ch = blast_run(assemblies.assembly, query_aa_file)
-
-    // gene coverage: % of reference protein matched, identity-weighted
+    blast_ch    = blast_run(assemblies.assembly, query_aa_file)
     coverage_ch = gene_coverage(blast_ch.tblastn_raw, ref_aa_length)
 
     // QC report: join QC json + assembly + gene coverage per sample
@@ -455,23 +447,47 @@ ERROR: Missing required parameter(s):
         .join(coverage_ch.coverage)
         .map { sid, json, asm, cov -> tuple(sid, params.platform, json, asm, cov) }
 
-    MERGE_QC(SAMPLE_QC(qc_input).qc_csv.collect())
+    sample_qc_ch = SAMPLE_QC(qc_input)
+    MERGE_QC(sample_qc_ch.qc_csv.map { sid, csv -> csv }.collect())
 
-    // protein clustal alignment, visualization and mutation report
-    prot_in = blast_ch.prot_seq
+    // Filter: only QC-passing samples into alignment and downstream
+    passing_prot_seq = sample_qc_ch.qc_csv
+        .filter { sid, csv ->
+            def lines  = csv.text.readLines()
+            def header = lines[0].split(',')
+            def vals   = lines[1].split(',')
+            def row    = [header, vals].transpose().collectEntries()
+            row.qc_status == 'PASS'
+        }
+        .map { sid, csv -> sid }
+        .join(blast_ch.prot_seq)
         .map { sid, fasta -> fasta }
-        .collectFile(name: 'all_aligned_protein.fasta')
 
+    // Filter: only QC-passing samples into cyp51
+    passing_assemblies = sample_qc_ch.qc_csv
+        .filter { sid, csv ->
+            def lines  = csv.text.readLines()
+            def header = lines[0].split(',')
+            def vals   = lines[1].split(',')
+            def row    = [header, vals].transpose().collectEntries()
+            row.qc_status == 'PASS'
+        }
+        .map { sid, csv -> sid }
+        .join(assemblies.assembly)
+        .map { sid, asm -> tuple(sid, asm) }
+
+    // Protein alignment, visualization and mutation report (QC-passing only)
+    prot_in  = passing_prot_seq.collectFile(name: 'all_aligned_protein.fasta')
     prot_aln = combine_and_align(query_aa_file, prot_in)
     visualize_snps(prot_aln)
     parse_mutations(prot_aln)
 
-    // everything here onwards is exclusively cyp51 analysis
+    // Cyp51 analysis on QC-passing samples only
     if ( params.cyp51 ) {
         log.info "Running Cyp51/TR analysis"
 
-        best_hit     = extract_best_hit(assemblies.assembly, query_fa_file)
-        extract_ch   = assemblies.assembly.join(best_hit.best_hit)
+        best_hit     = extract_best_hit(passing_assemblies, query_fa_file)
+        extract_ch   = passing_assemblies.join(best_hit.best_hit)
         cyp51_seq_ch = extract_cyp51_coding_noncoding_sequence(extract_ch)
 
         tr_ch   = cyp51_seq_ch.non_coding_seq
