@@ -33,8 +33,7 @@ if (params.help) {
 
 process FASTP {
     tag "${sampleID}"
-    publishDir "${params.outdir}/filtered_reads", mode: 'copy',
-        saveAs: {filename -> filename.endsWith('.fastq.gz') ? filename : null}
+    publishDir "${params.outdir}/filtered_reads", mode: 'copy'
 
     input:
     tuple val(sampleID), path(read1), path(read2)
