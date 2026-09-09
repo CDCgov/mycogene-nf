@@ -2,21 +2,28 @@
 
 nextflow.enable.dsl = 2
 
-params.input    = ''
-params.cyp51    = false
-params.outdir   = "results"
-params.query_aa = ''
-params.query_fa = ''
-params.help     = false
+params.input        = ''
+params.add_sra_file = ''
+params.cyp51        = false
+params.outdir       = "results"
+params.query_aa     = ''
+params.query_fa     = ''
+params.help         = false
 
 ///// HELP MESSAGE /////
 if (params.help) {
     help = """
 |Usage:
 |mycogene.nf --input <input_samplesheet> --outdir <output_dir>
+|mycogene.nf --add_sra_file <accessions.txt> --outdir <output_dir>
+|mycogene.nf --input <input_samplesheet> --add_sra_file <accessions.txt> --outdir <output_dir>
 |
-|Required arguments:
-| --input      Samplesheet with the Format: sampleID:path/to/fastq1:path/to/fastq2
+|Provide at least one of:
+| --input          Samplesheet with the Format: sampleID:path/to/fastq1:path/to/fastq2
+| --add_sra_file   Text file of SRA run accessions (one SRR/ERR/DRR per line); reads are
+|                   downloaded with sra-tools and combined with any --input samples
+|
+|Also required:
 | --outdir     Directory where process outputs are saved
 | --query_aa   Amino acid sequence for the gene of interest
 | --platform   Illumina/ONT
@@ -76,6 +83,27 @@ process FASTPLONG {
         -e 20 \
         -j ${sampleID}_qc.json \
         -h /dev/null
+    """
+}
+
+// SRA download (combined with --input, if both are given)
+
+process DOWNLOAD_SRA {
+    tag "${accession}"
+    publishDir "${params.outdir}/raw_reads", mode: 'copy'
+
+    input:
+    val(accession)
+
+    output:
+    tuple val(accession), path("*.fastq.gz")
+
+    script:
+    def split_flag = params.platform == 'illumina' ? '--split-files' : ''
+    """
+    prefetch ${accession} -O .
+    fasterq-dump ${accession}/${accession}.sra ${split_flag} --threads ${task.cpus} -O .
+    gzip *.fastq
     """
 }
 
@@ -394,16 +422,19 @@ process plot_TR {
 workflow {
 
     def required = [
-        input    : "Please specify the input samplesheet",
         query_aa : "Please specify the path to the gene amino acid sequence FASTA file",
         platform : "Please specify the sequencing platform: 'illumina' or 'ont'"
     ]
     def missing = required.findAll { k, msg -> !params[k] }
     if ( missing ) {
         error """
-ERROR: Missing required parameter(s):
-  ${missing.collect { k, msg -> "--${k}: ${msg}" }.join('\n  ')}
-"""
+        ERROR: Missing required parameter(s):
+        ${missing.collect { k, msg -> "--${k}: ${msg}" }.join('\n  ')}
+        """
+    }
+
+    if ( !params.input && !params.add_sra_file ) {
+        error "ERROR: Specify at least one of --input (samplesheet) or --add_sra_file (SRA accession list)"
     }
 
     if ( params.cyp51 && !params.query_fa ) {
@@ -421,18 +452,39 @@ ERROR: Missing required parameter(s):
         }
     }
 
+    if ( params.add_sra_file ) {
+        ch_accessions = Channel.fromPath(params.add_sra_file)
+            .splitText()
+            .map { it.trim() }
+            .filter { it }
+
+        dl_reads = DOWNLOAD_SRA(ch_accessions)
+    }
+
     if (params.platform == 'illumina') {
-        ch_samples = Channel.fromPath(params.input)
-            .splitCsv(header: true)
-            .map { row -> tuple(row.sample, file(row.fastq_1), file(row.fastq_2)) }
+        ch_from_input = params.input
+            ? Channel.fromPath(params.input)
+                .splitCsv(header: true)
+                .map { row -> tuple(row.sample, file(row.fastq_1), file(row.fastq_2)) }
+            : Channel.empty()
+        ch_from_sra = params.add_sra_file
+            ? dl_reads.map { id, reads -> tuple(id, reads[0], reads[1]) }
+            : Channel.empty()
+        ch_samples = ch_from_input.mix(ch_from_sra)
         qc_reads  = FASTP(ch_samples)
         assemblies = ASSEMBLY_ILLUMINA(qc_reads.trimmed)
     }
 
     if (params.platform == 'ont') {
-        ch_samples = Channel.fromPath(params.input)
-            .splitCsv(header: true)
-            .map { row -> tuple(row.sample, file("${row.folder}/*.fastq.gz")) }
+        ch_from_input = params.input
+            ? Channel.fromPath(params.input)
+                .splitCsv(header: true)
+                .map { row -> tuple(row.sample, file("${row.folder}/*.fastq.gz")) }
+            : Channel.empty()
+        ch_from_sra = params.add_sra_file
+            ? dl_reads.map { id, reads -> tuple(id, reads) }
+            : Channel.empty()
+        ch_samples = ch_from_input.mix(ch_from_sra)
         qc_reads  = FASTPLONG(ch_samples)
         assemblies = ASSEMBLY_ONT(qc_reads.trimmed)
     }
