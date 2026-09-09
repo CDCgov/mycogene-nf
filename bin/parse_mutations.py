@@ -86,7 +86,7 @@ def mutations_for_sample(ref_aln, sample_aln):
         # -- Deletion: gap in sample ----------------------------------------
         if qry_aa == "-":
             del_start = ref_pos
-            j = i
+            j = i + 1
             while j < n and sample_aln[j] == "-":
                 if ref_aln[j] != "-":
                     ref_pos += 1
