@@ -14,6 +14,7 @@ import sys
 
 FIELDNAMES = [
     "sample",
+    "gene",
     "gene_coverage",
     "avg_qscore",
     "percent_retained",

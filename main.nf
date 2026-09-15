@@ -8,6 +8,7 @@ params.cyp51        = false
 params.outdir       = "results"
 params.query_aa     = ''
 params.query_fa     = ''
+params.multi_query = ''
 params.help         = false
 
 ///// HELP MESSAGE /////
@@ -19,17 +20,31 @@ if (params.help) {
 |mycogene.nf --input <input_samplesheet> --add_sra_file <accessions.txt> --outdir <output_dir>
 |
 |Provide at least one of:
-| --input          Samplesheet with the Format: sampleID:path/to/fastq1:path/to/fastq2
+| --input          Samplesheet (CSV, header row required):
+|                   Illumina: sample,fastq_1,fastq_2
+|                   ONT:      sample,folder  (folder containing that sample's *.fastq.gz)
 | --add_sra_file   Text file of SRA run accessions (one SRR/ERR/DRR per line); reads are
 |                   downloaded with sra-tools and combined with any --input samples
 |
 |Also required:
 | --outdir     Directory where process outputs are saved
-| --query_aa   Amino acid sequence for the gene of interest
 | --platform   Illumina/ONT
+|
+|Provide exactly one of:
+| --query_aa      Amino acid sequence for a single gene of interest
+| --multi_query   CSV file for multi-gene mode, no header, one gene per line:
+|                  gene_name,/path/to/gene_protein.fasta
+|                  Every sample is BLASTed against every gene in one run. Outputs keep
+|                  the usual top-level folders (blast_gene_hits/, plots/, mutation_report/)
+|                  with gene as a subfolder inside each, e.g. blast_gene_hits/<gene>/...
+|                  Mutation files are flat: mutation_report/<gene>_mutations.csv.
+|                  QC report stays a single results/qc_report/qc_report.csv with a 'gene'
+|                  column, since coverage is evaluated per gene.
+|                  NOTE: --cyp51 cannot currently be combined with --multi_query.
 |
 |Optional arguments:
 | --cyp51      Run the analysis to identify SNPs and TR regions in the Cyp51 gene of all samples
+|               (single-gene mode only)
 | --query_fa   Nucleotide sequence for the gene of interest (required when --cyp51 is set)
 | --help       Print this message and exit""".stripMargin()
     println(help)
@@ -143,16 +158,15 @@ process ASSEMBLY_ONT {
 }
 
 process blast_run {
-    tag "${sampleID}"
-    publishDir "${params.outdir}/blast_gene_hits", mode: 'copy', saveAs: { fname -> "${sampleID}/${fname}" }
+    tag "${geneName ? geneName + ':' : ''}${sampleID}"
+    publishDir "${params.outdir}/blast_gene_hits${geneName ? '/' + geneName : ''}", mode: 'copy', saveAs: { fname -> "${sampleID}/${fname}" }
 
     input:
-    tuple val(sampleID), path(assembly)
-    path(query_aa)
+    tuple val(sampleID), path(assembly), val(geneName), path(query_aa)
 
     output:
-    tuple val(sampleID), path("prot_seq_${sampleID}.fasta"),    emit: prot_seq
-    tuple val(sampleID), path("tblastn_raw_${sampleID}.tsv"),   emit: tblastn_raw
+    tuple val(geneName), val(sampleID), path("prot_seq_${sampleID}.fasta"),  emit: prot_seq
+    tuple val(geneName), val(sampleID), path("tblastn_raw_${sampleID}.tsv"), emit: tblastn_raw
 
     script:
     """
@@ -191,14 +205,13 @@ process blast_run {
 // Gene coverage: identity-weighted coverage of the reference protein
 
 process gene_coverage {
-    tag "${sampleID}"
+    tag "${geneName ? geneName + ':' : ''}${sampleID}"
 
     input:
-    tuple val(sampleID), path(tblastn_raw)
-    val(ref_length)
+    tuple val(geneName), val(sampleID), path(tblastn_raw), val(ref_length)
 
     output:
-    tuple val(sampleID), path("coverage_${sampleID}.csv"), emit: coverage
+    tuple val(geneName), val(sampleID), path("coverage_${sampleID}.csv"), emit: coverage
 
     script:
     """
@@ -213,23 +226,24 @@ process gene_coverage {
 // Per-sample QC report
 
 process SAMPLE_QC {
-    tag "${sampleID}"
+    tag "${geneName ? geneName + ':' : ''}${sampleID}"
 
     input:
-    tuple val(sampleID), val(platform), path(json), path(assembly), path(coverage_csv)
+    tuple val(sampleID), val(platform), val(geneName), path(json), path(assembly), path(coverage_csv)
 
     output:
-    tuple val(sampleID), path("${sampleID}_qc.csv"), emit: qc_csv
+    tuple val(geneName), val(sampleID), path("${geneName ? geneName + '_' : ''}${sampleID}_qc.csv"), emit: qc_csv
 
     script:
     """
     sample_qc.py \
         --sample        ${sampleID} \
         --platform      ${platform} \
+        --gene          "${geneName}" \
         --json          ${json} \
         --assembly      ${assembly} \
         --gene-coverage ${coverage_csv} \
-        --output        ${sampleID}_qc.csv
+        --output        ${geneName ? geneName + '_' : ''}${sampleID}_qc.csv
     """
 }
 
@@ -253,27 +267,28 @@ process MERGE_QC {
 /// Protein alignment analysis
 
 process combine_and_align {
-    publishDir "${params.outdir}/plots", mode: 'copy'
+    tag "${geneName}"
+    publishDir "${params.outdir}/plots${geneName ? '/' + geneName : ''}", mode: 'copy'
 
     input:
-    path(query_aa)
-    path(prot_seq)
+    tuple val(geneName), path(query_aa), path(prot_seqs)
 
     output:
-    path("aln_protein_output.fasta")
+    tuple val(geneName), path("aln_protein_output.fasta")
 
     script:
     """
-    cat ${query_aa} ${prot_seq} > protein_output.fasta
+    cat ${query_aa} ${prot_seqs.join(' ')} > protein_output.fasta
     clustalo -i protein_output.fasta -o aln_protein_output.fasta
     """
 }
 
 process visualize_snps {
-    publishDir "${params.outdir}/plots", mode: 'copy'
+    tag "${geneName}"
+    publishDir "${params.outdir}/plots${geneName ? '/' + geneName : ''}", mode: 'copy'
 
     input:
-    path(alignment)
+    tuple val(geneName), path(alignment)
 
     output:
     path("protein_aln_snp.html")
@@ -285,17 +300,18 @@ process visualize_snps {
 }
 
 process parse_mutations {
+    tag "${geneName}"
     publishDir "${params.outdir}/mutation_report", mode: 'copy'
 
     input:
-    path(alignment)
+    tuple val(geneName), path(alignment)
 
     output:
-    path("mutations.csv")
+    path("${geneName ? geneName + '_' : ''}mutations.csv")
 
     script:
     """
-    parse_mutations.py --alignment ${alignment} --output mutations.csv
+    parse_mutations.py --alignment ${alignment} --output ${geneName ? geneName + '_' : ''}mutations.csv
     """
 }
 
@@ -422,34 +438,58 @@ process plot_TR {
 workflow {
 
     def required = [
-        query_aa : "Please specify the path to the gene amino acid sequence FASTA file",
         platform : "Please specify the sequencing platform: 'illumina' or 'ont'"
     ]
     def missing = required.findAll { k, msg -> !params[k] }
     if ( missing ) {
         error """
-        ERROR: Missing required parameter(s):
-        ${missing.collect { k, msg -> "--${k}: ${msg}" }.join('\n  ')}
-        """
+ERROR: Missing required parameter(s):
+  ${missing.collect { k, msg -> "--${k}: ${msg}" }.join('\n  ')}
+"""
     }
 
     if ( !params.input && !params.add_sra_file ) {
         error "ERROR: Specify at least one of --input (samplesheet) or --add_sra_file (SRA accession list)"
     }
 
+    if ( !params.query_aa && !params.multi_query ) {
+        error "ERROR: Specify one of --query_aa (single gene) or --multi_query (multi-gene CSV)"
+    }
+
+    if ( params.query_aa && params.multi_query ) {
+        error "ERROR: Specify only one of --query_aa or --multi_query, not both"
+    }
+
+    if ( params.cyp51 && params.multi_query ) {
+        error "ERROR: --cyp51 cannot currently be combined with --multi_query; run the Cyp51 TR analysis as a separate single-gene invocation"
+    }
+
     if ( params.cyp51 && !params.query_fa ) {
         error "Missing required parameter for Cyp51 Analysis: --query_fa"
     }
 
-    def query_aa_file = file(params.query_aa)
     def query_fa_file = params.query_fa ? file(params.query_fa) : null
 
-    // Reference protein length, used as the coverage denominator
-    def ref_aa_length = 0
-    query_aa_file.eachLine { line ->
-        if (!line.startsWith(">")) {
-            ref_aa_length += line.trim().length()
-        }
+    // Build the gene channel: (geneName, queryAaFile, refAaLength)
+    // Single-gene mode uses geneName = '' so publishDir/filenames stay exactly
+    // as they were before multi-gene support (no /'' subfolder, no ''_ prefix).
+    def countAaLength = { f ->
+        def len = 0
+        f.eachLine { line -> if (!line.startsWith('>')) len += line.trim().length() }
+        return len
+    }
+
+    if ( params.multi_query ) {
+        ch_genes = Channel.fromPath(params.multi_query)
+            .splitCsv()
+            .map { row ->
+                def geneName  = row[0].trim()
+                def queryFile = file(row[1].trim())
+                tuple(geneName, queryFile, countAaLength(queryFile))
+            }
+    } else {
+        def query_aa_file = file(params.query_aa)
+        ch_genes = Channel.of( tuple('', query_aa_file, countAaLength(query_aa_file)) )
     }
 
     if ( params.add_sra_file ) {
@@ -489,47 +529,55 @@ workflow {
         assemblies = ASSEMBLY_ONT(qc_reads.trimmed)
     }
 
-    blast_ch    = blast_run(assemblies.assembly, query_aa_file)
-    coverage_ch = gene_coverage(blast_ch.tblastn_raw, ref_aa_length)
+    blast_input = assemblies.assembly.combine(ch_genes)   // (sampleID, assembly, geneName, queryFile, refLen)
+        .map { sid, asm, gene, query, len -> tuple(sid, asm, gene, query) }
 
-    // QC report: join QC json + assembly + gene coverage per sample
-    qc_input = qc_reads.json
-        .join(assemblies.assembly)
-        .join(coverage_ch.coverage)
-        .map { sid, json, asm, cov -> tuple(sid, params.platform, json, asm, cov) }
+    blast_ch = blast_run(blast_input)
+
+    ch_gene_reflen = ch_genes.map { gene, query, len -> tuple(gene, len) }
+
+    coverage_input = blast_ch.tblastn_raw
+        .combine(ch_gene_reflen, by: 0)                    // (geneName, sampleID, tsv, refLen)
+
+    coverage_ch = gene_coverage(coverage_input)
+
+    // QC report: broadcast per-sample json/assembly across every gene's coverage row
+    qc_input = coverage_ch.coverage
+        .map { gene, sid, cov -> tuple(sid, gene, cov) }
+        .combine(qc_reads.json, by: 0)
+        .combine(assemblies.assembly, by: 0)
+        .map { sid, gene, cov, json, asm -> tuple(sid, params.platform, gene, json, asm, cov) }
 
     sample_qc_ch = SAMPLE_QC(qc_input)
-    MERGE_QC(sample_qc_ch.qc_csv.map { sid, csv -> csv }.collect())
+    MERGE_QC(sample_qc_ch.qc_csv.map { gene, sid, csv -> csv }.collect())
 
-    // Filter: only QC-passing samples into alignment and downstream
-    passing_prot_seq = sample_qc_ch.qc_csv
-        .filter { sid, csv ->
+    // Filter: only QC-passing (sample, gene) pairs go into alignment and downstream
+    passing_keys = sample_qc_ch.qc_csv
+        .filter { gene, sid, csv ->
             def lines  = csv.text.readLines()
             def header = lines[0].split(',')
             def vals   = lines[1].split(',')
             def row    = [header, vals].transpose().collectEntries()
             row.qc_status == 'PASS'
         }
-        .map { sid, csv -> sid }
-        .join(blast_ch.prot_seq)
-        .map { sid, fasta -> fasta }
+        .map { gene, sid, csv -> tuple(gene, sid) }
 
-    // Filter: only QC-passing samples into cyp51
-    passing_assemblies = sample_qc_ch.qc_csv
-        .filter { sid, csv ->
-            def lines  = csv.text.readLines()
-            def header = lines[0].split(',')
-            def vals   = lines[1].split(',')
-            def row    = [header, vals].transpose().collectEntries()
-            row.qc_status == 'PASS'
-        }
-        .map { sid, csv -> sid }
+    passing_prot_seq = passing_keys
+        .combine(blast_ch.prot_seq, by: [0, 1])
+        .map { gene, sid, fasta -> tuple(gene, fasta) }
+
+    // Filter: only QC-passing samples into cyp51 (single-gene mode only, geneName == '')
+    passing_assemblies = passing_keys
+        .map { gene, sid -> sid }
         .join(assemblies.assembly)
         .map { sid, asm -> tuple(sid, asm) }
 
-    // Protein alignment, visualization and mutation report (QC-passing only)
-    prot_in  = passing_prot_seq.collectFile(name: 'all_aligned_protein.fasta')
-    prot_aln = combine_and_align(query_aa_file, prot_in)
+    // Protein alignment, visualization and mutation report (per gene, QC-passing only)
+    align_input = ch_genes
+        .map { gene, query, len -> tuple(gene, query) }
+        .join(passing_prot_seq.groupTuple())
+
+    prot_aln = combine_and_align(align_input)
     visualize_snps(prot_aln)
     parse_mutations(prot_aln)
 

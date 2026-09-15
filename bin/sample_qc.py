@@ -24,6 +24,7 @@ MIN_AVG_QSCORE    = 20.0   # mean quality score
 
 FIELDNAMES = [
     "sample",
+    "gene",
     "gene_coverage",
     "avg_qscore",
     "percent_retained",
@@ -126,6 +127,7 @@ def determine_qc_status(gene_coverage, avg_qscore):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--sample",        required=True)
+    parser.add_argument("--gene",          default="", help="Gene name (multi-gene mode); empty for single-gene mode")
     parser.add_argument("--platform",      required=True, choices=["illumina", "ont"])
     parser.add_argument("--json",          required=True)
     parser.add_argument("--assembly",      required=True)
@@ -148,6 +150,7 @@ def main():
 
     row = {
         "sample":           args.sample,
+        "gene":             args.gene,
         "gene_coverage":    gene_coverage,
         "avg_qscore":       qc_metrics["avg_qscore"],
         "percent_retained": qc_metrics["percent_retained"],
