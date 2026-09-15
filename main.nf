@@ -15,9 +15,12 @@ params.help         = false
 if (params.help) {
     help = """
 |Usage:
-|mycogene.nf --input <input_samplesheet> --outdir <output_dir>
-|mycogene.nf --add_sra_file <accessions.txt> --outdir <output_dir>
-|mycogene.nf --input <input_samplesheet> --add_sra_file <accessions.txt> --outdir <output_dir>
+|mycogene.nf --input <input_samplesheet> --query_aa <gene_aa.fasta> --platform <illumina|ont> --outdir <output_dir>
+|mycogene.nf --add_sra_file <accessions.txt> --query_aa <gene_aa.fasta> --platform <illumina|ont> --outdir <output_dir>
+|mycogene.nf --input <input_samplesheet> --add_sra_file <accessions.txt> --query_aa <gene_aa.fasta> --platform <illumina|ont> --outdir <output_dir>
+|mycogene.nf --input <input_samplesheet> --multi_query <genes.csv> --platform <illumina|ont> --outdir <output_dir>
+|
+|Every command needs a reads source, a query, --platform, and --outdir. See below.
 |
 |Provide at least one of:
 | --input          Samplesheet (CSV, header row required):
