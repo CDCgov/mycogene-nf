@@ -213,8 +213,16 @@ nextflow run main.nf \
 nextflow run main.nf --help
 ```
 
+## Credits
+
+MycoGene-NF was originally developed at CDC and is currently maintained by CDC's Mycotic Diseases Branch.
+
+We thank the following people (alphabetical order by last name) for their code contributions or assistance in the development of this pipeline:
+* Mahika Kadam [@mmkadam](https://github.com/mkadam27)
+* Elizabeth Misas [@AspTryGlu](https://github.com/AspTryGlu)
+
 # Citations
-If you use MycoGene in your work, please consider this citing repository https://github.com/CDCgov/MycoGene
+If you use MycoGene-NF in your work, please consider this citing repository https://github.com/CDCgov/mycogene-nf
 
 # CDCgov GitHub Organization Open Source Project
 
