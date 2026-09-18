@@ -1,7 +1,6 @@
 # 🍄🧬 MycoGene-nf: Gene-Targeted Variant Analysis of Fungal Isolates
-
-![nextflow](https://img.shields.io/badge/nextflow-DSL2-23aa62.svg)(https://www.nextflow.io/)
-![run with singularity](https://img.shields.io/badge/run%20with-singularity-1d355c.svg)(https://sylabs.io/docs/)
+[![Nextflow](https://img.shields.io/badge/nextflow%20DSL2-%E2%89%A521.10.3-23aa62.svg?labelColor=000000)](https://www.nextflow.io/)
+[![run with singularity](https://img.shields.io/badge/run%20with-singularity-1d355c.svg?labelColor=000000)](https://sylabs.io/docs/)
 
 ## Introduction
 
