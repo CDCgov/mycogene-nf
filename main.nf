@@ -109,6 +109,7 @@ process FASTPLONG {
 process DOWNLOAD_SRA {
     tag "${accession}"
     publishDir "${params.outdir}/raw_reads", mode: 'copy'
+    errorStrategy 'ignore'
 
     input:
     val(accession)
@@ -117,11 +118,22 @@ process DOWNLOAD_SRA {
     tuple val(accession), path("*.fastq.gz")
 
     script:
-    def split_flag = params.platform == 'illumina' ? '--split-files' : ''
+    def split_flag     = params.platform == 'illumina' ? '--split-files' : ''
+    def expected_files = params.platform == 'illumina' ? 2 : 1
     """
     prefetch ${accession} -O .
+    vdb-validate ${accession}/${accession}.sra
+
     fasterq-dump ${accession}/${accession}.sra ${split_flag} --threads ${task.cpus} -O .
-    gzip *.fastq
+
+    shopt -s nullglob
+    fastq_files=(*.fastq)
+    if [ \${#fastq_files[@]} -ne ${expected_files} ]; then
+        echo "ERROR: expected ${expected_files} fastq file(s) for ${accession} (platform=${params.platform}), got \${#fastq_files[@]}" >&2
+        exit 1
+    fi
+
+    gzip "\${fastq_files[@]}"
     """
 }
 
