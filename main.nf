@@ -9,6 +9,7 @@ params.outdir       = "results"
 params.query_aa     = ''
 params.query_fa     = ''
 params.multi_query = ''
+params.min_gene_coverage = 90.0
 params.help         = false
 
 ///// HELP MESSAGE /////
@@ -46,10 +47,11 @@ if (params.help) {
 |                  NOTE: --cyp51 cannot currently be combined with --multi_query.
 |
 |Optional arguments:
-| --cyp51      Run the analysis to identify SNPs and TR regions in the Cyp51 gene of all samples
-|               (single-gene mode only)
-| --query_fa   Nucleotide sequence for the gene of interest (required when --cyp51 is set)
-| --help       Print this message and exit""".stripMargin()
+| --cyp51      		Run the analysis to identify SNPs and TR regions in the Cyp51 gene of all samples
+|               	(single-gene mode only)
+| --query_fa   		Nucleotide sequence for the gene of interest (required when --cyp51 is set)
+| --min_gene_coverage	Minimum gene coverage (Default= 90)
+| --help       		Print this message and exit""".stripMargin()
     println(help)
     exit(0)
 }
@@ -258,6 +260,7 @@ process SAMPLE_QC {
         --json          ${json} \
         --assembly      ${assembly} \
         --gene-coverage ${coverage_csv} \
+        --min-gene-coverage ${params.min_gene_coverage} \
         --output        ${geneName ? geneName + '_' : ''}${sampleID}_qc.csv
     """
 }
