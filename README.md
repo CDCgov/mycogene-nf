@@ -1,4 +1,5 @@
 # 🍄🧬 MycoGene-nf: Gene-Targeted Variant Analysis of Fungal Isolates
+
 [![Nextflow](https://img.shields.io/badge/nextflow%20DSL2-%E2%89%A521.10.3-23aa62.svg?labelColor=000000)](https://www.nextflow.io/)
 [![run with singularity](https://img.shields.io/badge/run%20with-singularity-1d355c.svg?labelColor=000000)](https://sylabs.io/docs/)
 
@@ -242,6 +243,7 @@ If you use MycoGene-NF in your work, please consider this citing repository http
 ## Overview
 
 Describe the purpose of your project. Add additional sections as necessary to help collaborators and potential collaborators understand and use your project.
+
   
 ## Public Domain Standard Notice
 This repository constitutes a work of the United States Government and is not

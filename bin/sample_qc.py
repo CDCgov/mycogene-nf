@@ -6,10 +6,15 @@ Parse fastp (Illumina) or fastplong (ONT) JSON, assembly FASTA, and
 gene coverage to produce one CSV row of QC metrics per sample.
 
 Usage:
-    sample_qc.py --sample <id> --platform <illumina|ont> \
-                 --json <sample_qc.json> --assembly <scaffolds.fasta> \
-                 --gene-coverage <coverage.csv> \
-                 --output <sample_qc.csv>
+    sample_qc.py \
+    --sample        ${sampleID} \
+    --platform      ${platform} \
+    --gene          "${geneName}" \
+    --json          ${json} \
+    --assembly      ${assembly} \
+    --gene-coverage ${coverage_csv} \
+    --min-gene-coverage ${params.min_gene_coverage} \
+    --output        ${geneName ? geneName + '_' : ''}${sampleID}_qc.csv
 """
 
 import argparse
@@ -111,16 +116,18 @@ def parse_gene_coverage(coverage_csv):
         return float(row["gene_coverage"])
 
 
-def determine_qc_status(gene_coverage, avg_qscore):
+def determine_qc_status(gene_coverage, avg_qscore, min_gene_coverage):
     reasons = []
 
-    if isinstance(gene_coverage, (int, float)) and gene_coverage < MIN_GENE_COVERAGE:
-        reasons.append(f"low_gene_coverage(<{MIN_GENE_COVERAGE}%)")
+    if isinstance(gene_coverage, (int, float)) and gene_coverage < min_gene_coverage:
+        reasons.append(f"low_gene_coverage(<{min_gene_coverage}%)")
+
     if isinstance(avg_qscore, (int, float)) and avg_qscore < MIN_AVG_QSCORE:
         reasons.append(f"low_avg_qscore(<{MIN_AVG_QSCORE})")
 
     if reasons:
         return "FAIL", ";".join(reasons)
+
     return "PASS", ""
 
 
@@ -132,6 +139,7 @@ def main():
     parser.add_argument("--json",          required=True)
     parser.add_argument("--assembly",      required=True)
     parser.add_argument("--gene-coverage", required=True)
+    parser.add_argument("--min-gene-coverage", type=float, default=90.0)
     parser.add_argument("--output",        required=True)
     args = parser.parse_args()
 
@@ -144,9 +152,10 @@ def main():
     gene_coverage    = parse_gene_coverage(args.gene_coverage)
 
     qc_status, qc_fail_reason = determine_qc_status(
-        gene_coverage,
-        qc_metrics["avg_qscore"],
-    )
+    gene_coverage,
+    qc_metrics["avg_qscore"],
+    args.min_gene_coverage,
+)
 
     row = {
         "sample":           args.sample,

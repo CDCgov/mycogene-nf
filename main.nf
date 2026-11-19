@@ -9,6 +9,7 @@ params.outdir       = "results"
 params.query_aa     = ''
 params.query_fa     = ''
 params.multi_query = ''
+params.min_gene_coverage = 90.0
 params.help         = false
 
 ///// HELP MESSAGE /////
@@ -46,10 +47,11 @@ if (params.help) {
 |                  NOTE: --cyp51 cannot currently be combined with --multi_query.
 |
 |Optional arguments:
-| --cyp51      Run the analysis to identify SNPs and TR regions in the Cyp51 gene of all samples
-|               (single-gene mode only)
-| --query_fa   Nucleotide sequence for the gene of interest (required when --cyp51 is set)
-| --help       Print this message and exit""".stripMargin()
+| --cyp51      		Run the analysis to identify SNPs and TR regions in the Cyp51 gene of all samples
+|               	(single-gene mode only)
+| --query_fa   		Nucleotide sequence for the gene of interest (required when --cyp51 is set)
+| --min_gene_coverage	Minimum gene coverage (Default= 90)
+| --help       		Print this message and exit""".stripMargin()
     println(help)
     exit(0)
 }
@@ -109,7 +111,6 @@ process FASTPLONG {
 process DOWNLOAD_SRA {
     tag "${accession}"
     publishDir "${params.outdir}/raw_reads", mode: 'copy'
-    errorStrategy 'ignore'
 
     input:
     val(accession)
@@ -118,22 +119,11 @@ process DOWNLOAD_SRA {
     tuple val(accession), path("*.fastq.gz")
 
     script:
-    def split_flag     = params.platform == 'illumina' ? '--split-files' : ''
-    def expected_files = params.platform == 'illumina' ? 2 : 1
+    def split_flag = params.platform == 'illumina' ? '--split-files' : ''
     """
     prefetch ${accession} -O .
-    vdb-validate ${accession}/${accession}.sra
-
     fasterq-dump ${accession}/${accession}.sra ${split_flag} --threads ${task.cpus} -O .
-
-    shopt -s nullglob
-    fastq_files=(*.fastq)
-    if [ \${#fastq_files[@]} -ne ${expected_files} ]; then
-        echo "ERROR: expected ${expected_files} fastq file(s) for ${accession} (platform=${params.platform}), got \${#fastq_files[@]}" >&2
-        exit 1
-    fi
-
-    gzip "\${fastq_files[@]}"
+    gzip *.fastq
     """
 }
 
@@ -258,6 +248,7 @@ process SAMPLE_QC {
         --json          ${json} \
         --assembly      ${assembly} \
         --gene-coverage ${coverage_csv} \
+        --min-gene-coverage ${params.min_gene_coverage} \
         --output        ${geneName ? geneName + '_' : ''}${sampleID}_qc.csv
     """
 }
